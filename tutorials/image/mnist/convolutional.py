@@ -1,3 +1,18 @@
+# Redundant parameter experiment:
+# before modification:
+# Step 4200 (epoch 9.77), 6.5 ms
+# Minibatch loss: 2.238, learning rate: 0.006302
+# Minibatch error: 0.0%
+# Validation error: 0.8%
+# Test error: 1.0%
+#
+# After change
+# Step 15300 (epoch 17.80), 8.4 ms
+# Minibatch loss: 2.246, learning rate: 0.004181
+# Minibatch error: 0.0%
+# Validation error: 0.7%
+# Step 15400 (epoch 17.92), 8.3 ms
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,8 +57,8 @@ PIXEL_DEPTH = 255
 NUM_LABELS = 10
 VALIDATION_SIZE = 5000  # Size of the validation set.
 SEED = 66478  # Set to None for random seed.
-BATCH_SIZE = 128
-NUM_EPOCHS = 10
+BATCH_SIZE = 64
+NUM_EPOCHS = 100
 EVAL_BATCH_SIZE = 64
 EVAL_FREQUENCY = 100  # Number of steps between evaluations.
 
@@ -169,17 +184,33 @@ def main(_):
       [5, 5, 32, 64], stddev=0.1,
       seed=SEED, dtype=data_type()))
   conv2_biases = tf.Variable(tf.constant(0.1, shape=[64], dtype=data_type()))
-  fc1_weights = tf.Variable(  # fully connected, depth 512.
+  fc1_weights_a = tf.Variable(  # fully connected, depth 512.
       tf.truncated_normal([IMAGE_SIZE // 4 * IMAGE_SIZE // 4 * 64, 512],
                           stddev=0.1,
                           seed=SEED,
                           dtype=data_type()))
-  fc1_biases = tf.Variable(tf.constant(0.1, shape=[512], dtype=data_type()))
+  fc1_weights_b = tf.Variable(  # fully connected, depth 512.
+      tf.truncated_normal([IMAGE_SIZE // 4 * IMAGE_SIZE // 4 * 64, 512],
+                          stddev=0.1,
+                          seed=SEED,
+                          dtype=data_type()))
+  fc1_biases_a = tf.Variable(tf.constant(0.1, shape=[512], dtype=data_type()))
+  fc1_biases_b = tf.Variable(tf.constant(0.1, shape=[512], dtype=data_type()))
   fc2_weights = tf.Variable(tf.truncated_normal([512, NUM_LABELS],
                                                 stddev=0.1,
                                                 seed=SEED,
                                                 dtype=data_type()))
-  fc2_biases = tf.Variable(tf.constant(
+  fc2_weights_a = tf.Variable(tf.truncated_normal([512, NUM_LABELS],
+                                                stddev=0.1,
+                                                seed=SEED,
+                                                dtype=data_type()))
+  fc2_weights_b = tf.Variable(tf.truncated_normal([512, NUM_LABELS],
+                                                stddev=0.1,
+                                                seed=SEED,
+                                                dtype=data_type()))
+  fc2_biases_a = tf.Variable(tf.constant(
+      0.1, shape=[NUM_LABELS], dtype=data_type()))
+  fc2_biases_b = tf.Variable(tf.constant(
       0.1, shape=[NUM_LABELS], dtype=data_type()))
 
   # We will replicate the model structure for the training subgraph, as well
@@ -218,12 +249,16 @@ def main(_):
         [pool_shape[0], pool_shape[1] * pool_shape[2] * pool_shape[3]])
     # Fully connected layer. Note that the '+' operation automatically
     # broadcasts the biases.
-    hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases)
+    hidden_a = tf.nn.relu(tf.matmul(reshape, fc1_weights_a) + fc1_biases_a)
+    hidden_b = tf.nn.relu(tf.matmul(reshape, fc1_weights_b) + fc1_biases_b)
     # Add a 50% dropout during training only. Dropout also scales
     # activations such that no rescaling is needed at evaluation time.
     if train:
-      hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
-    return tf.matmul(hidden, fc2_weights) + fc2_biases
+      hidden_a = tf.nn.dropout(hidden_a, 0.5, seed=SEED)
+      hidden_b = tf.nn.dropout(hidden_b, 0.5, seed=SEED+1)
+    result_a = tf.matmul(hidden_a, fc2_weights_a) + fc2_biases_a
+    result_b = tf.matmul(hidden_b, fc2_weights_b) + fc2_biases_b
+    return (result_a+result_b)/2
 
   # Training computation: logits + cross-entropy loss.
   logits = model(train_data_node, True)
@@ -231,8 +266,11 @@ def main(_):
       labels=train_labels_node, logits=logits))
 
   # L2 regularization for the fully connected parameters.
-  regularizers = (tf.nn.l2_loss(fc1_weights) + tf.nn.l2_loss(fc1_biases) +
-                  tf.nn.l2_loss(fc2_weights) + tf.nn.l2_loss(fc2_biases))
+  regularizers_a = (tf.nn.l2_loss(fc1_weights_a) + tf.nn.l2_loss(fc1_biases_a) +
+                  tf.nn.l2_loss(fc2_weights_a) + tf.nn.l2_loss(fc2_biases_a))
+  regularizers_b = (tf.nn.l2_loss(fc1_weights_b) + tf.nn.l2_loss(fc1_biases_b) +
+                  tf.nn.l2_loss(fc2_weights_b) + tf.nn.l2_loss(fc2_biases_b))
+  regularizers = regularizers_a+regularizers_b
   # Add the regularization term to the loss.
   loss += 5e-4 * regularizers
 
